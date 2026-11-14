@@ -4,6 +4,7 @@ name: Build Clock APK
 # builds the APK with Buildozer, and publishes it under Releases.
 # (If the project files are already in the repo root, it builds those directly.)
 # The first build is slow (about 15-30 minutes) because Android tools are downloaded.
+# Later builds reuse the cached tools and are much faster.
 
 on:
   push:
@@ -14,7 +15,8 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Pinned on purpose: "ubuntu-latest" moves to new Ubuntu versions that break Android tooling.
+    runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
       - name: Check out repository
@@ -42,17 +44,50 @@ jobs:
             echo "No project found yet. Upload the project .zip to start a build."
           fi
 
+      - name: Set up Java 17
+        if: steps.loc.outputs.ready == 'yes'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python 3.10
+        if: steps.loc.outputs.ready == 'yes'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install system packages
+        if: steps.loc.outputs.ready == 'yes'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git zip unzip build-essential ccache autoconf automake libtool libltdl-dev \
+            pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev
+          # Only exists on older Ubuntu; harmless if missing.
+          sudo apt-get install -y libtinfo5 || true
+
+      - name: Install Buildozer
+        if: steps.loc.outputs.ready == 'yes'
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install buildozer "cython==0.29.37"
+
+      - name: Cache Android SDK/NDK downloads
+        if: steps.loc.outputs.ready == 'yes'
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildozer
+          key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-${{ runner.os }}-
+
       - name: Build APK with Buildozer
         if: steps.loc.outputs.ready == 'yes'
-        id: buildozer
-        uses: ArtemSBulgakov/buildozer-action@v1
-        with:
-          command: buildozer android debug
-          buildozer_version: stable
+        run: buildozer -v android debug
 
       - name: Find the APK
         if: steps.loc.outputs.ready == 'yes'
-        id: apk
         run: |
           APK=$(ls -1 bin/*.apk 2>/dev/null | head -n 1 || true)
           if [ -z "$APK" ]; then
