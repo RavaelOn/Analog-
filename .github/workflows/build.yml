@@ -1,0 +1,82 @@
+name: Build Clock APK
+
+# Phone-friendly: upload ONE .zip of the project to the repo root and this unpacks it,
+# builds the APK with Buildozer, and publishes it under Releases.
+# (If the project files are already in the repo root, it builds those directly.)
+# The first build is slow (about 15-30 minutes) because Android tools are downloaded.
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Locate project
+        id: loc
+        run: |
+          zipfile=$(ls -1 *.zip 2>/dev/null | head -n 1 || true)
+          if [ -n "$zipfile" ]; then
+            echo "Unpacking $zipfile"
+            mkdir -p _src
+            unzip -q -o "$zipfile" -d _src
+            found=$(find _src -maxdepth 2 -name buildozer.spec | head -n 1)
+            if [ -z "$found" ]; then
+              echo "::error::$zipfile does not contain buildozer.spec"
+              exit 1
+            fi
+            cp -a "$(dirname "$found")"/. .
+            echo "ready=yes" >> "$GITHUB_OUTPUT"
+          elif [ -f buildozer.spec ]; then
+            echo "ready=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=no" >> "$GITHUB_OUTPUT"
+            echo "No project found yet. Upload the project .zip to start a build."
+          fi
+
+      - name: Build APK with Buildozer
+        if: steps.loc.outputs.ready == 'yes'
+        id: buildozer
+        uses: ArtemSBulgakov/buildozer-action@v1
+        with:
+          command: buildozer android debug
+          buildozer_version: stable
+
+      - name: Find the APK
+        if: steps.loc.outputs.ready == 'yes'
+        id: apk
+        run: |
+          APK=$(ls -1 bin/*.apk 2>/dev/null | head -n 1 || true)
+          if [ -z "$APK" ]; then
+            echo "::error::No APK was produced. Open the 'Build APK with Buildozer' step to see why."
+            exit 1
+          fi
+          cp "$APK" GoldenClock.apk
+          echo "Built $APK"
+
+      - name: Upload APK as a build artifact
+        if: steps.loc.outputs.ready == 'yes'
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoldenClock-APK
+          path: GoldenClock.apk
+
+      - name: Publish APK to Releases (direct download)
+        if: steps.loc.outputs.ready == 'yes'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "build-${{ github.run_number }}" GoldenClock.apk \
+            --title "Golden Analog Clock build ${{ github.run_number }}" \
+            --notes "Debug APK built by GitHub Actions. Install it on your Android phone."
+            
